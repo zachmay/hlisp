@@ -1,0 +1,192 @@
+Zachary May
+CS 655
+Final Project
+
+HLisp - An Impure Lisp Dialect in Haskell
+
+USAGE
+
+You can run the interpreter via:
+
+> runhaskell HLisp [input files]
+
+The input files will be parsed and executed in the order given. The program
+then drops into a REPL with all the bindings made in the input files 
+available.
+
+The REPL is pretty fragile. It does not support expressions over multiple lines.
+Runtime errors terminate the program entirely, although syntax errors in
+expressions are more forgiving.
+
+There is a makefile which includes targets to run a test suite and to
+load up the interactive interpreter with the same files the test suite uses.
+
+DEPENDENCIES
+
+The following Haskell packages are required:
+- Control.Monad.State (this is available after your installation of libghc-mtl-dev)
+- Text.Parsec (available in the package haskell-parsec on Debian systems)
+
+TESTS
+
+Not wanting to add another dependency for automated testing, there is a target
+in the makefile to run tests. It just executes some tests, redirects output to
+a file and does a diff on a file with expected output. It's not very sophisticated.
+
+NOTATION
+
+Below, text in {braces} is meant to refer to Haskell code (type names, functions,
+etc.), while text in [brackets] is meant to refer to Lisp code. I use ML-style
+notation when discussing type variables since it stands out better in plain text.
+
+ORGANIZATION
+
+- HLisp.hs: The program entry point. Reads files from the command line then drops
+  user into REPL.
+
+- HLisp/Types.hs: Defines several types, defines class instances for {SExpr}
+  (e.g., {Eq} to allow structural equality tests and {Show} to enable conversion
+  to strings for printing), and defines some lower-level functions used in
+  the {Show} implementation.
+
+- HLisp/Reader.hs: Defines a monadic parser for Lisp expressions.
+
+- HLisp/Environment.hs: Defines methods related to interaction with the referencing
+  environment, as well as a default environment containing built-in functions.
+
+- HLisp/Builtin.hs: Defines Haskell implementations for several built-in functions.
+  Each of these functions assume no interaction with the environment and that
+  the arguments are already evaluated and passed in as a Haskell list of
+  S-Expressions.
+
+- HLisp/Evaluator.hs: The core evaluation function and supporting code. One design
+  note: There are several "special" cases in the body of the function eval. I call
+  refer to these in comments as "forms", even though not all are considered that
+  in standard Lisp nomenclature. These differ from the built-in functions in that
+  they receive their parameters still in the form of a raw chain of Cons cells and
+  have access to the referencing environment. For example, short-circuit semantics
+  for logical AND preclude it from being a built-in in this scheme. 
+    This special-casing is certainly a code smell. Were I to continue work in this,
+  I would prefer to unify these cases, or at least factor the explicit mentions
+  of form names out of the definition of {eval}.
+
+- tests/*: Automated tests.
+
+- Makefile: Includes targets primarily for testing. I haven't bothered building
+  this into binaries.
+
+- README: This file.
+
+DESIGN
+
+The metacircular Lisp interpreter we studied in class supported a fully pure Lisp
+implementation: that is, all of the operations it defined were without side
+effects. Translating this model to Haskell would have been fairly trivial since
+the semantics of both the host and target language are pure. I chose to work on a
+more interesting problem: implementing an impure, stateful Lisp within the pure
+semantics of Haskell.
+
+REPRESENTING S-EXPRESSIONS
+
+S-expressions, the core of Lisp, are implemented as an abstract data type with
+several cases. The atoms [nil] and [t] are represented with the nullary value
+constructors {Nil} and {TrueAtom} respectively. Other value constructors represent
+integers, floating-point numbers, strings, and symbols. The value constructor
+{Cons} represents a Lisp 'cons' cell.
+
+One departure from the basic design of the metacircular interpeter from class was
+the introduction of S-expressions representing native functions. The value
+constructor {Native} wraps a Haskell function with a specific type signature that
+can be stored away in a referencing environment to be looked up and evaluated as
+part of the normal mechanism of function evaluation. This eliminates some of the
+awkward case matching we saw in the metacircular interpreter, although we still
+have the caveats mentioned above.
+
+PARSING
+
+Parsing techniques were not the primary focus of this project, but the Haskell
+implementation does demonstrate an interesting technique. The library Parsec is
+an API for parser combinators. Each combinator represents a relatively simple 
+parsing element: {symbol} matches a string literal, the {<|>} operator gives us
+alternatives. The internal machinery of handling the parser state is hidden away
+and the result is parsing code that looks pretty close to BNF!
+
+This implementation also makes use of another nice feature of Parsec: combinator
+functions that key off of language definitions abstract away many of the concepts
+that appear again and again in parsers: single- and multiple-line comments, string
+and numeric literals, identifiers, etc. Using this, we can define, say, the 
+specifics for identifiers in our language and expect the identifier combinator to
+do the right thing.
+
+THE EVALUATION ENVIRONMENT
+
+This interpreter borrows the basic approach from the metacircular interpreter.
+Rather than using a linear search-driven association list, we use use Haskell's
+{Map} type, which implements a key-value map with size-balanced binary trees
+(see: http://groups.csail.mit.edu/mac/users/adams/BB/). The keys are strings,
+the values are Haskell lists of S-expressions. The front-most element of the
+list represents the current binding. Elements deeper into the list represent
+previous bindings that are currently shadowed.
+
+MODELING IMPURITY
+
+Haskell is a pure functional language, so we have no direct access to mutable
+global state. We can model the idea of a function mutating state by passing
+the initial state (along with any actual parameters) to a function that returns
+the new, mutated state along with its normal return value. In Haskell, this 
+pattern (as well as many others, including I/O) is abstracted via a class of types
+called Monads. They can be thought of as a way of composing or sequencing 
+computations.
+
+Monads instances are polymorphic types in a single type variable. They support two
+main functions: {return}, which takes a value of type 'a and wraps it in the monadic
+structure, resulting in type 'm 'a; and {>>=} which is a function of type
+'a -> ('a -> 'm 'b) -> 'm 'b. This is the way we were two monaidc operations
+together. 
+
+In particular, the actual type of 'm when we talk about the State monad is
+{State Environment}. That is, the type state we pass around is of type
+Environment. Thus, the compiler knows that the {State Environment} monad's
+implementation of {>>=} is specifically going to handle passing an Environment
+into one operation and and will expect to see a (possibly) updated Environment that
+it can pass on to the next operation in the sequence. 
+
+Importantly, the {State a} monad offers two functions {put} and {get}. {get} lets
+us access the current state value (of type 'a), and {put} lets us store it back.
+So envPut (cf. Environment.hs), the function for binding a value to an identifier,
+is a sequencing of three operations in the {State Environment} monad: get the 
+current Environment, put back the value of the old Environment updated with the
+new identifier and value (a pure function on immutable maps), then inject the
+value back into {State Environment}.
+
+The result is that the entire evaluation machinery is actually a sequence of
+monadic operations in {State Environment}. For example, in function evaluation,
+we use {mapM}, defined abstractly over an arbitrary monad, in the specific case 
+of sequencing the stateful evaluation of the argument list. This monadic operation
+is sequenced with parameter binding, body evaluation, and parameter unbinding.
+The entire operation is monadic and can be sequenced as part of the evaluation
+of a whole series of expressions.
+
+This overview has been a bit long-winded, but the management of runtime state
+is far and away the most interesting part the interpreter.
+
+LIMITATIONS AND FUTURE WORK
+
+As defined here, there is no support for deep binding. All function evaluation
+is done within the global referencing environment, which is modified with formal-
+actual parameter binding. For example:
+
+    lisp> (defun self-compose (f) (lambda (x) (f (f x))))
+    lisp> (defun square (x) (* x x))
+    lisp> (self-compose square)
+    (LAMBDA (X) (F (F X)))
+
+Unless some other code bound F to SQUARE, the F/SQUARE binding expired at the end
+of the evaluation of self-compose and no longer exists at the time that the
+lambda is actually applied. Lisp 1.5 offered explicit deep binding with [function],
+but I have not implemented that here.
+
+This interpreter also does not support the Lisp concept of property lists. Although
+I've included the metacircular interpreter from Program 3, the parts that use
+[get] do not work properly.
+
